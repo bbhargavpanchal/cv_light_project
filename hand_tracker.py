@@ -11,20 +11,23 @@ import mediapipe as mp
 from mediapipe.tasks.python import vision as mp_vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 
+from utils import distance
+
 _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/1/hand_landmarker.task"
 )
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "hand_landmarker.task")
 
-# Standard MediaPipe 21-point hand topology — named fingertip indices,
-# used later for pinch detection (toggle.py) and occlusion (occlusion.py)
+# Standard MediaPipe 21-point hand topology — named indices used for
+# pinch detection (toggle.py), occlusion (occlusion.py), and fist/grab
+# detection (light_control.py) below.
 WRIST = 0
 THUMB_TIP = 4
-INDEX_TIP = 8
-MIDDLE_TIP = 12
-RING_TIP = 16
-PINKY_TIP = 20
+INDEX_MCP, INDEX_PIP, INDEX_TIP = 5, 6, 8
+MIDDLE_MCP, MIDDLE_PIP, MIDDLE_TIP = 9, 10, 12
+RING_MCP, RING_PIP, RING_TIP = 13, 14, 16
+PINKY_MCP, PINKY_PIP, PINKY_TIP = 17, 18, 20
 NUM_LANDMARKS = 21
 
 # Bone connections for skeleton drawing
@@ -66,6 +69,15 @@ class Hand:
         ys = [p[1] for p in self.landmarks_px]
         return min(xs), min(ys), max(xs), max(ys)
 
+    def palm_center(self):
+        """Centroid of the wrist + four MCP knuckles — a point that
+        stays roughly put whether the hand is open or clenched, unlike
+        a fingertip. Used as the "grab point" for dragging the light."""
+        idxs = (WRIST, INDEX_MCP, MIDDLE_MCP, RING_MCP, PINKY_MCP)
+        xs = [self.landmarks_px[i][0] for i in idxs]
+        ys = [self.landmarks_px[i][1] for i in idxs]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+
 
 class HandTracker:
     def __init__(self, max_hands: int = 2, min_detection_confidence: float = 0.5):
@@ -103,6 +115,30 @@ class HandTracker:
 
     def close(self):
         self._landmarker.close()
+
+
+def is_fist(hand, min_curled=4):
+    """True if at least `min_curled` of the four fingers (thumb
+    excluded — its curl direction doesn't fit this simple check as
+    reliably) are folded in toward the palm.
+
+    Heuristic: a folded finger's tip ends up closer to the wrist than
+    its own PIP knuckle is; an extended finger's tip is much farther
+    from the wrist than the PIP. Cheap, no calibration needed, and
+    doesn't require the thumb to get a clean signal.
+    """
+    fingers = (
+        (INDEX_TIP, INDEX_PIP),
+        (MIDDLE_TIP, MIDDLE_PIP),
+        (RING_TIP, RING_PIP),
+        (PINKY_TIP, PINKY_PIP),
+    )
+    wrist = hand.point(WRIST)
+    curled = sum(
+        1 for tip_idx, pip_idx in fingers
+        if distance(wrist, hand.point(tip_idx)) < distance(wrist, hand.point(pip_idx))
+    )
+    return curled >= min_curled
 
 
 def draw_hand_landmarks(frame, hands, states=None, point_color=(0, 255, 0), line_color=(255, 255, 255)):

@@ -1,18 +1,21 @@
-"""Phase 3: eye-tracked light + two-hand tracking + eclipse occlusion.
+"""Grab-and-drag light + two-hand tracking + eclipse occlusion.
 
-Hold a hand up so it overlaps the light, then push it toward the
-camera: once it's close enough, it eclipses the light (your real hand
-pixels show through where they overlap). Pull it back to a normal
-gesture distance and the light stays on top instead, like your hand's
-gone behind it. The on-screen label next to each hand shows which
-state it's in (front / behind / idle) so you can check the feel.
+Eye-tracked positioning is gone: the light starts at frame centre, and
+you move it by clenching a fist near it (grab), moving your hand
+(drag), and opening your hand or pulling away (drop). Eye/face
+tracking returns in Phase 4, repurposed for the head-anchored toggle
+rather than the light.
+
+The on-screen readout shows hands detected, whether the light is
+currently held, and each hand's eclipse state (front / behind / idle)
+so the two systems' interaction is easy to see while testing.
 """
 
 import cv2
 
-from face_tracker import FaceTracker
 from hand_tracker import HandTracker, draw_hand_landmarks
 from light import Light
+from light_control import LightDragController
 import occlusion
 
 
@@ -21,9 +24,9 @@ def main():
     if not cap.isOpened():
         raise RuntimeError("Could not open webcam.")
 
-    face_tracker = FaceTracker(smoothing_alpha=0.3)
     hand_tracker = HandTracker(max_hands=2)
     light = Light()
+    drag = LightDragController()
 
     try:
         while True:
@@ -33,26 +36,28 @@ def main():
 
             frame = cv2.flip(frame, 1)  # mirror, feels natural — also matches
             h, w = frame.shape[:2]      # MediaPipe's handedness convention
+
+            if light.position is None:
+                light.update_position((w // 2, h // 2))  # visible + grabbable from frame one
+
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-            eye_pos = face_tracker.get_eye_midpoint(frame_rgb, w, h)
-            light.update_position(eye_pos)
-
             hands = hand_tracker.get_hands(frame_rgb, w, h)
+
+            drag.update(light, hands)
 
             frame, states = occlusion.apply_lighting(frame, light, hands)
             frame = draw_hand_landmarks(frame, hands, states=states)
 
             cv2.putText(
-                frame, f"Hands detected: {len(hands)}",
+                frame,
+                f"Hands detected: {len(hands)}  |  Light: {'held' if drag.held else 'free'}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
             )
 
-            cv2.imshow("CV Light Project - Phase 3", frame)
+            cv2.imshow("CV Light Project", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
-        face_tracker.close()
         hand_tracker.close()
         cap.release()
         cv2.destroyAllWindows()
