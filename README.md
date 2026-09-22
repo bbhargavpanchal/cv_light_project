@@ -1,8 +1,16 @@
-## phase 3 a demo:
 
-
+## Phase 3 a demo:
 
 https://github.com/user-attachments/assets/722251c1-e386-4f51-abe7-779b119deb19
 
 
+## Phase 3 b:
+
+https://github.com/user-attachments/assets/e122790b-0bac-4a6d-a329-280e4f7ea125
+
+
+
+## Phase 4:
+
+https://github.com/user-attachments/assets/a1151f94-ec7e-4866-8de9-aed6bdcafbdc
 
