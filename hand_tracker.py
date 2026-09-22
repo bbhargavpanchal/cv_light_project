@@ -105,11 +105,15 @@ class HandTracker:
         self._landmarker.close()
 
 
-def draw_hand_landmarks(frame, hands, point_color=(0, 255, 0), line_color=(255, 255, 255)):
-    """Debug-draw skeleton for a list of Hand objects onto frame in place."""
+def draw_hand_landmarks(frame, hands, states=None, point_color=(0, 255, 0), line_color=(255, 255, 255)):
+    """Debug-draw skeleton for a list of Hand objects onto frame in place.
+
+    `states`, if given, is a list of per-hand labels (e.g. from
+    occlusion.apply_lighting) shown alongside handedness — lets you
+    confirm the front/behind/idle classification live while testing."""
     import cv2
 
-    for hand in hands:
+    for i, hand in enumerate(hands):
         pts = hand.landmarks_px
         for a, b in HAND_CONNECTIONS:
             pa = (int(pts[a][0]), int(pts[a][1]))
@@ -117,10 +121,13 @@ def draw_hand_landmarks(frame, hands, point_color=(0, 255, 0), line_color=(255, 
             cv2.line(frame, pa, pb, line_color, 2)
         for x, y in pts:
             cv2.circle(frame, (int(x), int(y)), 4, point_color, -1)
-        # label handedness near the wrist
+        # label handedness (+ eclipse state, if provided) near the wrist
+        label = f"{hand.handedness} ({hand.score:.2f})"
+        if states is not None and i < len(states):
+            label += f" - {states[i]}"
         wx, wy = pts[WRIST]
         cv2.putText(
-            frame, f"{hand.handedness} ({hand.score:.2f})",
+            frame, label,
             (int(wx) - 20, int(wy) + 30),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2,
         )

@@ -1,9 +1,11 @@
-"""Phase 2: webcam feed + eye-tracked light + two-hand tracking.
+"""Phase 3: eye-tracked light + two-hand tracking + eclipse occlusion.
 
-This phase is about confirming hand detection is reliable before wiring
-up the eclipse effect. Both hands' skeletons are drawn, plus a simple
-"hands detected" readout, so you can check tracking holds up as hands
-move, overlap, or partially leave frame.
+Hold a hand up so it overlaps the light, then push it toward the
+camera: once it's close enough, it eclipses the light (your real hand
+pixels show through where they overlap). Pull it back to a normal
+gesture distance and the light stays on top instead, like your hand's
+gone behind it. The on-screen label next to each hand shows which
+state it's in (front / behind / idle) so you can check the feel.
 """
 
 import cv2
@@ -11,6 +13,7 @@ import cv2
 from face_tracker import FaceTracker
 from hand_tracker import HandTracker, draw_hand_landmarks
 from light import Light
+import occlusion
 
 
 def main():
@@ -34,17 +37,18 @@ def main():
 
             eye_pos = face_tracker.get_eye_midpoint(frame_rgb, w, h)
             light.update_position(eye_pos)
-            frame = light.draw(frame)
 
             hands = hand_tracker.get_hands(frame_rgb, w, h)
-            frame = draw_hand_landmarks(frame, hands)
+
+            frame, states = occlusion.apply_lighting(frame, light, hands)
+            frame = draw_hand_landmarks(frame, hands, states=states)
 
             cv2.putText(
                 frame, f"Hands detected: {len(hands)}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
             )
 
-            cv2.imshow("CV Light Project - Phase 2", frame)
+            cv2.imshow("CV Light Project - Phase 3", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     finally:
