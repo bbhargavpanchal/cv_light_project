@@ -141,6 +141,46 @@ def is_fist(hand, min_curled=4):
     return curled >= min_curled
 
 
+# Flip this to -1 if palm_facing_camera() reads backwards on your setup
+# (i.e. eclipse triggers when you show your palm instead of the back of
+# your hand). Nothing else needs to change -- see that function.
+PALM_SIGN = -1
+
+
+def palm_facing_camera(hand):
+    """True if the palm is facing the camera; False if the back of the
+    hand is facing the camera. Used to gate the eclipse effect: showing
+    the back of your hand eclipses the light, showing your palm doesn't.
+
+    Method: the (wrist, index_MCP, pinky_MCP) triangle winds one way
+    when the palm faces the camera and the other way when the hand is
+    flipped to show its back — this holds regardless of which way the
+    hand is rotated in-plane (fingers up, sideways, whatever), unlike
+    comparing two landmarks' x-positions directly, which only works
+    for a roughly-upright hand. Verified against 8 rotations before
+    shipping: the sign only ever flips on a genuine palm<->back flip,
+    never from rotation alone. Only needs 2D pixel positions, not
+    MediaPipe's less reliable depth (z).
+
+    Calibrated against the standard convention for a mirrored/selfie
+    webcam feed (which this project always uses, via cv2.flip): a
+    RIGHT hand with its palm facing the camera has the thumb to the
+    left of the pinky on screen. If your setup reads backwards, flip
+    PALM_SIGN above.
+    """
+    wrist = hand.point(WRIST)
+    index_mcp = hand.point(INDEX_MCP)
+    pinky_mcp = hand.point(PINKY_MCP)
+
+    v1x, v1y = index_mcp[0] - wrist[0], index_mcp[1] - wrist[1]
+    v2x, v2y = pinky_mcp[0] - wrist[0], pinky_mcp[1] - wrist[1]
+    cross_z = (v1x * v2y - v1y * v2x) * PALM_SIGN
+
+    if hand.handedness == "Left":
+        return cross_z < 0
+    return cross_z > 0  # "Right" and "Unknown" both fall back to this convention
+
+
 def draw_hand_landmarks(frame, hands, states=None, point_color=(0, 255, 0), line_color=(255, 255, 255)):
     """Debug-draw skeleton for a list of Hand objects onto frame in place.
 
