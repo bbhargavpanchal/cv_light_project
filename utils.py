@@ -38,3 +38,30 @@ def distance(p1, p2):
 
 def lerp(a, b, t):
     return a + (b - a) * t
+
+
+class Spring:
+    """A damped spring easing toward a target scalar.
+
+    Unlike EMASmoother (which only eases monotonically toward a value),
+    a spring naturally overshoots and settles -- the "pop then settle"
+    feel of something being picked up or put down, rather than a flat
+    linear ramp. Call set_target() when the target changes, update()
+    once per frame to advance it.
+    """
+
+    def __init__(self, stiffness: float = 0.25, damping: float = 0.65, initial: float = 0.0):
+        self.value = initial
+        self.velocity = 0.0
+        self.target = initial
+        self.stiffness = stiffness
+        self.damping = damping
+
+    def set_target(self, target: float):
+        self.target = target
+
+    def update(self):
+        force = (self.target - self.value) * self.stiffness
+        self.velocity = (self.velocity + force) * self.damping
+        self.value += self.velocity
+        return self.value

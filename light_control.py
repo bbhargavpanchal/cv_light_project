@@ -27,26 +27,26 @@ class LightDragController:
     def update(self, light, hands):
         """Call once per frame, after hands are detected and before
         the light is drawn. Mutates light.position when grabbing or
-        dragging; does nothing when free and no fist is in reach."""
+        dragging, and always syncs light's held state afterwards so it
+        can animate the pop-on-grab / settle-on-release itself."""
         fist_hands = [h for h in hands if is_fist(h, self.min_curled)]
 
         if self.held:
             if not fist_hands or light.position is None:
                 self.held = False  # hand opened, or vanished -> drop it here
-                return
-            # No persistent hand IDs from MediaPipe, so "same hand" is
-            # approximated as whichever fist is nearest the light's
-            # current position. Self-reinforcing: the hand actually
-            # dragging is always ~0px away, since we moved the light
-            # there last frame, so it wins this every time in practice.
-            nearest = min(fist_hands, key=lambda h: distance(h.palm_center(), light.position))
-            light.update_position(nearest.palm_center())
-            return
+            else:
+                # No persistent hand IDs from MediaPipe, so "same hand" is
+                # approximated as whichever fist is nearest the light's
+                # current position. Self-reinforcing: the hand actually
+                # dragging is always ~0px away, since we moved the light
+                # there last frame, so it wins this every time in practice.
+                nearest = min(fist_hands, key=lambda h: distance(h.palm_center(), light.position))
+                light.update_position(nearest.palm_center())
+        elif light.position is not None:
+            for hand in fist_hands:
+                if distance(hand.palm_center(), light.position) <= self.grab_radius + light.radius:
+                    self.held = True
+                    light.update_position(hand.palm_center())
+                    break
 
-        if light.position is None:
-            return
-        for hand in fist_hands:
-            if distance(hand.palm_center(), light.position) <= self.grab_radius + light.radius:
-                self.held = True
-                light.update_position(hand.palm_center())
-                return
+        light.set_held(self.held)
