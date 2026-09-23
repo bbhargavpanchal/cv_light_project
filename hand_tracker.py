@@ -141,6 +141,23 @@ def is_fist(hand, min_curled=4):
     return curled >= min_curled
 
 
+def is_pinching(hand, ratio: float = 0.35):
+    """True if the thumb and index fingertips are touching (a pinch).
+
+    Compares their distance against a fraction of the hand's own
+    apparent size (wrist-to-middle_MCP), not a fixed pixel distance --
+    same reasoning as is_fist() using a same-hand relative comparison,
+    so this holds up regardless of how close the hand is to the
+    camera. Used to gate the day/night toggle (toggle.py): a pinch
+    only counts near the toggle switch, not anywhere on screen.
+    """
+    scale = distance(hand.point(WRIST), hand.point(MIDDLE_MCP))
+    if scale < 1e-6:
+        return False
+    pinch_dist = distance(hand.point(THUMB_TIP), hand.point(INDEX_TIP))
+    return pinch_dist < ratio * scale
+
+
 # Flip this to -1 if palm_facing_camera() reads backwards on your setup
 # (i.e. eclipse triggers when you show your palm instead of the back of
 # your hand). Nothing else needs to change -- see that function.

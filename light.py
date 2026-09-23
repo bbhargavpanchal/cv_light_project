@@ -11,14 +11,22 @@ __init__, since they only depend on radius/colour, not on where the
 light currently is. draw() just crops and pastes those fixed tiles at
 the current position each frame — no per-frame gradient or blur maths.
 
-Full sun<->moon swapping (with the day/night toggle) is a separate,
-later phase — this is a visual + motion polish pass on the one light
-that exists right now.
+Sun<->moon swapping now lives here too: a second, cooler-toned set of
+tiles is precomputed once alongside the sun's, and draw() takes a
+night_amount (0..1, driven by toggle.py's fade) to crossfade between
+them -- pasting whichever precomputed tile is pure day/pure night
+directly when there's no transition in progress (the common case,
+same cost as before this existed), and blending the two precomputed
+tiles with a single cheap cv2.addWeighted only during the brief window
+where night_amount is actually between 0 and 1.
 
 set_held() drives a small "pop" when the light is grabbed and a
 "settle" when it's released -- a Spring (not a plain ease) so it
 overshoots slightly on the way up and dips slightly on the way down,
-the way something physically picked up and set back down would.
+the way something physically picked up and set back down would. This
+is independent of and composes with the day/night crossfade: whichever
+base tile the night amount resolves to for this frame is what gets
+scaled/brightened for the pop, same as before.
 """
 
 import cv2
@@ -57,7 +65,8 @@ def _radial_gradient_tile(diameter, radius, center_color, edge_color):
 
 class Light:
     def __init__(self, radius: int = 40, center_color=(235, 255, 255),
-                 edge_color=(0, 170, 255), smoothing_alpha: float = 0.5):
+                 edge_color=(0, 170, 255), smoothing_alpha: float = 0.5,
+                 night_center_color=(255, 240, 210), night_edge_color=(160, 110, 60)):
         self.position = None
         self.radius = radius
         self.center_color = center_color
@@ -66,21 +75,35 @@ class Light:
         self._smoother = EMASmoother(alpha=smoothing_alpha)
         self._held_spring = Spring(stiffness=HELD_SPRING_STIFFNESS, damping=HELD_SPRING_DAMPING)
 
-        # crisp core: gradient tile exactly the size of the circle
+        # crisp core: gradient tile exactly the size of the circle.
+        # core_mask is pure shape (a circle at `radius`), so it's the
+        # same for day and night -- only the colours differ.
         core_d = radius * 2
         self._core_tile, self._core_mask = _radial_gradient_tile(
             core_d, radius, center_color, edge_color)
+        self._core_tile_night, _ = _radial_gradient_tile(
+            core_d, radius, night_center_color, night_edge_color)
 
         # soft glow: same gradient, drawn into a much bigger tile, then
         # bloomed via downsample->blur->upsample (cheap, same technique
-        # verified in the previous pass -- ~0.5ms vs ~18ms for a naive
+        # verified in an earlier pass -- ~0.5ms vs ~18ms for a naive
         # full-res blur) -- precomputed once, not per frame
         glow_d = self.glow_radius * 2
         glow_src, _ = _radial_gradient_tile(glow_d, radius, center_color, edge_color)
-        small_d = max(1, glow_d // GLOW_DOWNSCALE)
-        small = cv2.resize(glow_src, (small_d, small_d), interpolation=cv2.INTER_AREA)
+        self._glow_tile = self._bloom(glow_src)
+        glow_src_night, _ = _radial_gradient_tile(glow_d, radius, night_center_color, night_edge_color)
+        self._glow_tile_night = self._bloom(glow_src_night)
+
+    @staticmethod
+    def _bloom(src):
+        """Downsample -> blur -> upsample bloom, factored out so the
+        day and night glow tiles can both go through the exact same
+        precompute-once pipeline."""
+        d = src.shape[0]
+        small_d = max(1, d // GLOW_DOWNSCALE)
+        small = cv2.resize(src, (small_d, small_d), interpolation=cv2.INTER_AREA)
         small = cv2.GaussianBlur(small, (GLOW_BLUR_KERNEL, GLOW_BLUR_KERNEL), 0)
-        self._glow_tile = cv2.resize(small, (glow_d, glow_d), interpolation=cv2.INTER_LINEAR)
+        return cv2.resize(small, (d, d), interpolation=cv2.INTER_LINEAR)
 
     def update_position(self, position):
         if position is not None:
@@ -117,18 +140,34 @@ class Light:
             roi[mask_crop] = tile_crop[mask_crop]
             frame[y0:y1, x0:x1] = roi
 
-    def draw(self, frame):
+    def draw(self, frame, night_amount: float = 0.0):
         if self.position is None:
             return frame
+
+        night_amount = max(0.0, min(1.0, night_amount))
+
+        # resolve this frame's base (un-held) tiles: pure day, pure
+        # night, or -- only while actually transitioning -- a cheap
+        # single-call blend of the two precomputed sets. core_mask is
+        # shape-only, identical for both, so it's never blended.
+        if night_amount <= 0.0:
+            core_tile, glow_tile = self._core_tile, self._glow_tile
+        elif night_amount >= 1.0:
+            core_tile, glow_tile = self._core_tile_night, self._glow_tile_night
+        else:
+            core_tile = cv2.addWeighted(
+                self._core_tile, 1 - night_amount, self._core_tile_night, night_amount, 0)
+            glow_tile = cv2.addWeighted(
+                self._glow_tile, 1 - night_amount, self._glow_tile_night, night_amount, 0)
 
         amount = self._held_spring.update()
         amount = max(-0.5, min(1.5, amount))  # guard against pathological rapid grab/release cycling
 
         if abs(amount) < 0.01:
-            # at rest: paste the precomputed tiles directly, no per-frame
+            # at rest: paste the resolved tiles directly, no per-frame
             # resize/brighten cost -- this is the common case
-            self._paste(frame, self._glow_tile, self.glow_radius)
-            self._paste(frame, self._core_tile, self.radius, blend_mask=self._core_mask)
+            self._paste(frame, glow_tile, self.glow_radius)
+            self._paste(frame, core_tile, self.radius, blend_mask=self._core_mask)
             return frame
 
         scale = 1.0 + amount * HELD_SCALE_BOOST
@@ -136,8 +175,8 @@ class Light:
 
         glow_r = max(1, int(self.glow_radius * scale))
         core_r = max(1, int(self.radius * scale))
-        glow_tile = self._resized_bright(self._glow_tile, glow_r * 2, brighten)
-        core_tile = self._resized_bright(self._core_tile, core_r * 2, brighten)
+        glow_tile = self._resized_bright(glow_tile, glow_r * 2, brighten)
+        core_tile = self._resized_bright(core_tile, core_r * 2, brighten)
         core_mask = cv2.resize(
             (self._core_mask.astype(np.uint8) * 255), (core_r * 2, core_r * 2),
             interpolation=cv2.INTER_NEAREST,

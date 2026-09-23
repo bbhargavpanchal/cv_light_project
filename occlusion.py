@@ -51,9 +51,12 @@ def _hand_mask(hand, frame_shape):
     return mask
 
 
-def apply_lighting(frame, light, hands):
+def apply_lighting(frame, light, hands, night_amount: float = 0.0):
     """Draws the light onto `frame` and applies per-hand eclipse
-    occlusion on top of it.
+    occlusion on top of it. `night_amount` (0..1, from toggle.py) is
+    passed straight through to light.draw() so the sun/moon crossfade
+    keeps working the same whether or not a hand happens to be
+    eclipsing it that frame.
 
     Returns (composited_frame, states) — states is a list of
     'front' | 'behind' | 'idle', one per hand, same order as `hands`.
@@ -61,8 +64,8 @@ def apply_lighting(frame, light, hands):
     if light.position is None:
         return frame, ["idle"] * len(hands)
 
-    clean = frame.copy()       # real camera pixels, before the light is painted
-    frame = light.draw(frame)  # default compositing == "behind": light on top
+    clean = frame.copy()  # real camera pixels, before the light is painted
+    frame = light.draw(frame, night_amount=night_amount)  # default compositing == "behind": light on top
 
     states = []
     for hand in hands:
