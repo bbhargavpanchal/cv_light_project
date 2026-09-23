@@ -78,6 +78,18 @@ class Hand:
         ys = [self.landmarks_px[i][1] for i in idxs]
         return sum(xs) / len(xs), sum(ys) / len(ys)
 
+    def scale(self):
+        """A rough, camera-distance-relative size reference for this
+        hand, in px: bigger when the hand is closer to the camera,
+        smaller when it's further away -- apparent size is a far more
+        reliable distance proxy from a single webcam than MediaPipe's
+        own z depth estimate. wrist-to-middle_MCP is used because it
+        stays roughly constant whether the hand is open or clenched
+        (same reasoning as palm_center()). Used for is_pinching()'s
+        relative threshold and for the light's depth-aware sizing
+        (light_control.py)."""
+        return distance(self.landmarks_px[WRIST], self.landmarks_px[MIDDLE_MCP])
+
 
 class HandTracker:
     def __init__(self, max_hands: int = 2, min_detection_confidence: float = 0.5):
@@ -151,7 +163,7 @@ def is_pinching(hand, ratio: float = 0.35):
     camera. Used to gate the day/night toggle (toggle.py): a pinch
     only counts near the toggle switch, not anywhere on screen.
     """
-    scale = distance(hand.point(WRIST), hand.point(MIDDLE_MCP))
+    scale = hand.scale()
     if scale < 1e-6:
         return False
     pinch_dist = distance(hand.point(THUMB_TIP), hand.point(INDEX_TIP))

@@ -27,6 +27,16 @@ the way something physically picked up and set back down would. This
 is independent of and composes with the day/night crossfade: whichever
 base tile the night amount resolves to for this frame is what gets
 scaled/brightened for the pop, same as before.
+
+set_depth_scale() sets a second, persistent size multiplier (driven by
+light_control.py from the dragging hand's own apparent size) on top of
+that -- the pop is a brief flourish on pickup/release, depth scale is
+"how big this thing actually is right now" and composes multiplicatively
+with it. Because it changes the light's real size rather than just how
+it's drawn, bounding_box()/mask() track it too -- unlike every purely
+visual change so far (glow, gradient, night colours, the pop itself),
+which were deliberately kept off the hit-testing geometry so occlusion.py
+never had to change for them.
 """
 
 import cv2
@@ -74,6 +84,7 @@ class Light:
         self.glow_radius = radius * 4
         self._smoother = EMASmoother(alpha=smoothing_alpha)
         self._held_spring = Spring(stiffness=HELD_SPRING_STIFFNESS, damping=HELD_SPRING_DAMPING)
+        self._depth_scale = 1.0
 
         # crisp core: gradient tile exactly the size of the circle.
         # core_mask is pure shape (a circle at `radius`), so it's the
@@ -117,6 +128,12 @@ class Light:
         on grab / settle on release; draw() reads the spring's current
         value each frame."""
         self._held_spring.set_target(1.0 if is_held else 0.0)
+
+    def set_depth_scale(self, scale: float):
+        """Call once per frame with the current depth-aware size
+        multiplier (already smoothed and clamped by
+        light_control.LightDragController) -- 1.0 is normal size."""
+        self._depth_scale = scale
 
     def _paste(self, frame, tile, tile_center_offset, blend_mask=None):
         """Crop `tile` (a square, precomputed at construction time) to
@@ -163,15 +180,18 @@ class Light:
         amount = self._held_spring.update()
         amount = max(-0.5, min(1.5, amount))  # guard against pathological rapid grab/release cycling
 
-        if abs(amount) < 0.01:
-            # at rest: paste the resolved tiles directly, no per-frame
-            # resize/brighten cost -- this is the common case
+        scale = self._depth_scale * (1.0 + amount * HELD_SCALE_BOOST)
+        brighten = 1.0 + amount * HELD_BRIGHTNESS_BOOST
+
+        if abs(scale - 1.0) < 0.01 and abs(brighten - 1.0) < 0.01:
+            # truly at rest -- no pop AND no depth scaling in effect --
+            # paste the resolved tiles directly, no per-frame resize
+            # cost. Still the common case whenever depth scaling isn't
+            # in active use (the light starts at 1.0 and only moves
+            # away from it while a hand is actively dragging it).
             self._paste(frame, glow_tile, self.glow_radius)
             self._paste(frame, core_tile, self.radius, blend_mask=self._core_mask)
             return frame
-
-        scale = 1.0 + amount * HELD_SCALE_BOOST
-        brighten = 1.0 + amount * HELD_BRIGHTNESS_BOOST
 
         glow_r = max(1, int(self.glow_radius * scale))
         core_r = max(1, int(self.radius * scale))
@@ -196,18 +216,22 @@ class Light:
     def bounding_box(self):
         """Axis-aligned bounding square around the light's CORE circle
         (not the soft outer glow) — this is what occlusion.py eclipses
-        against, unchanged in meaning from Phase 3."""
+        against, unchanged in meaning from Phase 3. Scales with
+        depth_scale (a real size change) but deliberately not with the
+        brief pickup/release pop (not worth the coupling for something
+        that transient)."""
         if self.position is None:
             return None
         x, y = self.position
-        r = self.radius
+        r = self.radius * self._depth_scale
         return x - r, y - r, x + r, y + r
 
     def mask(self, frame_shape):
         """Binary mask (uint8, 0/255) of the light's CORE circle, same
-        shape as the video frame it'll be composited against."""
+        shape as the video frame it'll be composited against. Same
+        depth_scale-but-not-pop scaling as bounding_box()."""
         m = np.zeros(frame_shape[:2], dtype=np.uint8)
         if self.position is not None:
             x, y = int(self.position[0]), int(self.position[1])
-            cv2.circle(m, (x, y), self.radius, 255, -1)
+            cv2.circle(m, (x, y), int(self.radius * self._depth_scale), 255, -1)
         return m
